@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Telugu to English bookmark</title>
+<style>
+body{margin:0;background:#15121c;color:#ede9f5;font:16px/1.55 system-ui,sans-serif}
+.w{max-width:680px;margin:0 auto;padding:18px}
+h1{font-size:20px}
+h2{font-size:17px;margin-top:26px}
+textarea{width:100%;height:120px;background:#1f1b2a;color:#ede9f5;border:1px solid #332d44;border-radius:8px;padding:10px;font:11px monospace}
+button,a.b{display:inline-block;margin-top:8px;padding:12px 18px;border-radius:8px;border:0;background:#f2b134;color:#241a02;font:700 16px system-ui;text-decoration:none}
+li{margin:8px 0}
+small{color:#9a93ad}
+.note{background:#1f1b2a;border-left:3px solid #f2b134;padding:12px 14px;margin:16px 0;border-radius:0 8px 8px 0;font-size:14px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="w">
+<h1>Telugu → English live subtitles (bookmark, version 6)</h1>
+<p>This runs inside YouTube itself. It reads auto-generated Telugu captions and shows English over the video. No extension needed.</p>
+
+<div class="note">
+<b>v6 major fix:</b><br>
+YouTube auto-captions come out word-by-word. Previous versions translated every tiny piece → English became gibberish.<br><br>
+Now it <b>accumulates the growing phrase</b> and only translates when a reasonably complete chunk is ready. Much cleaner flow.
+</div>
+
+<h2>Step 1: copy the code</h2>
+<textarea id="c" readonly>javascript:(function(){if(window.__te){window.__te.t();return;}
+var on=true,cache={},last='',buf='',lastBuf='',seq=0,shown=0,pend=0,lc=0,fc=0,emptyAt=0,lastGood='',holdUntil=0;
+var o=document.createElement('div');
+o.style.cssText='position:absolute;left:50%;bottom:13%;transform:translateX(-50%);max-width:92%;z-index:2147483647;text-align:center;pointer-events:none;font:600 clamp(15px,2.15vw,30px)/1.35 Arial,sans-serif;color:#fff';
+var sp=document.createElement('span');
+sp.style.cssText='background:rgba(0,0,0,.86);padding:.25em .6em;border-radius:8px;display:none;text-shadow:0 1px 3px #000';
+o.appendChild(sp);
+var st=document.createElement('style');
+st.textContent='.ytp-caption-window-container{visibility:hidden!important}';
+document.head.appendChild(st);
+(document.querySelector('#movie-player')||document.body).appendChild(o);
+
+var J=function(u){return fetch(u).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});};
+var MM=function(q){return J('https://api.mymemory.translated.net/get?langpair=te|en&amp;q='+encodeURIComponent(q.slice(0,500))).then(function(j){return j.responseData.translatedText;});};
+var G=function(q){return J('https://translate.googleapis.com/translate_a/single?client=gtx&amp;sl=te&amp;tl=en&amp;dt=t&amp;q='+encodeURIComponent(q)).then(function(j){return j[0].map(function(x){return x[0];}).join('');}).catch(function(){return MM(q);});};
+
+var show=function(t,force){
+  if(!t){if(Date.now()>holdUntil)sp.style.display='none';return;}
+  sp.style.display='inline';
+  sp.textContent=t;
+  lastGood=t;
+  holdUntil=Date.now()+1800;
+};
+
+var lines=function(){
+  var w=document.querySelectorAll('.caption-visual-line');
+  var a=w.length?[].slice.call(w):[].slice.call(document.querySelectorAll('.ytp-caption-segment'));
+  return a.map(function(x){return (x.textContent||'').replace(/\s+/g,' ').trim();}).filter(Boolean);
+};
+
+function go(text){
+  if(!text||text.length<3)return;
+  var my=++seq;
+  (cache[text]?Promise.resolve(cache[text]):G(text).then(function(e){
+    e=(e||'').trim();
+    if(e)cache[text]=e;
+    return e;
+  })).then(function(e){
+    if(my>=shown&amp;&amp;e){shown=my;show(e,true);}
+  }).catch(function(er){
+    if(my>=shown){shown=my;show(lastGood||'…',true);}
+  });
+}
+
+setInterval(function(){
+  if(!on)return;
+  var raw=lines().join(' ').trim();
+  var n=Date.now();
+
+  // detect new text
+  if(raw!==last){
+    var isExt = last &amp;&amp; raw.startsWith(last) &amp;&amp; raw.length > last.length;
+    var isShrink = last &amp;&amp; last.startsWith(raw) &amp;&amp; raw.length < last.length;
+    last=raw;
+
+    if(raw){
+      emptyAt=0;
+
+      if(isExt){
+        // still growing → keep extending buffer, delay translation
+        buf = raw;
+        pend=1; lc=n;
+        if(!fc) fc=n;
+      } else if(isShrink){
+        // caption corrected itself (common) → ignore small shrinks
+        buf = raw;
+        pend=1; lc=n;
+      } else {
+        // completely new cue
+        if(buf &amp;&amp; buf.length >= 8){
+          // translate the previous buffer before switching
+          go(buf);
+        }
+        buf = raw;
+        pend=1; lc=n; fc=n;
+      }
+
+      // already cached?
+      if(cache[raw]){
+        shown=++seq;
+        show(cache[raw],true);
+        pend=0; fc=0;
+        return;
+      }
+    } else {
+      if(!emptyAt) emptyAt=n;
+    }
+  }
+
+  // clear after long empty
+  if(!raw &amp;&amp; emptyAt &amp;&amp; n-emptyAt > 1600){
+    if(buf &amp;&amp; buf.length>=6) go(buf);
+    buf=''; pend=0; fc=0;
+    show('');
+  }
+
+  // decide when to translate the current buffer
+  if(pend &amp;&amp; buf){
+    var stable = n - lc;
+    var alive  = n - fc;
+    var len = buf.length;
+
+    // short fragments need more time, longer ones can go sooner
+    var needStable = len < 12 ? 550 : (len < 25 ? 380 : 260);
+    var maxWait    = len < 12 ? 1400 : 1100;
+
+    if(stable >= needStable || alive >= maxWait){
+      pend=0; fc=0;
+      if(buf !== lastBuf){
+        lastBuf = buf;
+        go(buf);
+      }
+    }
+  }
+}, 85);
+
+window.__te={t:function(){on=!on;st.disabled=!on;o.style.display=on?'block':'none';}};
+var cc=document.querySelector('.ytp-subtitles-button');
+if(cc &amp;&amp; cc.getAttribute('aria-pressed')==='false') cc.click();
+})();</textarea>
+<button id="cp">Copy code</button> <span id="ok"></span>
+
+<h2>Step 2 (Android Chrome): save it as a bookmark</h2>
+<ol>
+<li>Tap <b>⋮ → ☆</b> to bookmark this page.</li>
+<li>Tap <b>⋮ → Bookmarks</b>, tap <b>⋮</b> next to the bookmark you just made, then <b>Edit</b>.</li>
+<li>Change the name to <b>tren</b>. Delete the address and <b>paste the code</b> in its place. Save.</li>
+</ol>
+
+<h2>Step 3: use it</h2>
+<ol>
+<li>In <b>Chrome</b> (not the YouTube app) open the movie at youtube.com or m.youtube.com.</li>
+<li>Tap the address bar, type <b>tren</b>, and tap the suggestion with the star ☆ icon.</li>
+<li>English subtitles appear over the video. Run it again to switch off.</li>
+</ol>
+
+<h2>On a PC</h2>
+<p>Drag this button to your bookmarks bar, open the movie on YouTube, then click it: 
+<a class="b" href="javascript:(function(){if(window.__te){window.__te.t();return;}
+var on=true,cache={},last='',buf='',lastBuf='',seq=0,shown=0,pend=0,lc=0,fc=0,emptyAt=0,lastGood='',holdUntil=0;
+var o=document.createElement('div');
+o.style.cssText='position:absolute;left:50%;bottom:13%;transform:translateX(-50%);max-width:92%;z-index:2147483647;text-align:center;pointer-events:none;font:600 clamp(15px,2.15vw,30px)/1.35 Arial,sans-serif;color:#fff';
+var sp=document.createElement('span');
+sp.style.cssText='background:rgba(0,0,0,.86);padding:.25em .6em;border-radius:8px;display:none;text-shadow:0 1px 3px #000';
+o.appendChild(sp);
+var st=document.createElement('style');
+st.textContent='.ytp-caption-window-container{visibility:hidden!important}';
+document.head.appendChild(st);
+(document.querySelector('#movie-player')||document.body).appendChild(o);
+
+var J=function(u){return fetch(u).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});};
+var MM=function(q){return J('https://api.mymemory.translated.net/get?langpair=te|en&amp;q='+encodeURIComponent(q.slice(0,500))).then(function(j){return j.responseData.translatedText;});};
+var G=function(q){return J('https://translate.googleapis.com/translate_a/single?client=gtx&amp;sl=te&amp;tl=en&amp;dt=t&amp;q='+encodeURIComponent(q)).then(function(j){return j[0].map(function(x){return x[0];}).join('');}).catch(function(){return MM(q);});};
+
+var show=function(t,force){
+  if(!t){if(Date.now()>holdUntil)sp.style.display='none';return;}
+  sp.style.display='inline';
+  sp.textContent=t;
+  lastGood=t;
+  holdUntil=Date.now()+1800;
+};
+
+var lines=function(){
+  var w=document.querySelectorAll('.caption-visual-line');
+  var a=w.length?[].slice.call(w):[].slice.call(document.querySelectorAll('.ytp-caption-segment'));
+  return a.map(function(x){return (x.textContent||'').replace(/\s+/g,' ').trim();}).filter(Boolean);
+};
+
+function go(text){
+  if(!text||text.length<3)return;
+  var my=++seq;
+  (cache[text]?Promise.resolve(cache[text]):G(text).then(function(e){
+    e=(e||'').trim();
+    if(e)cache[text]=e;
+    return e;
+  })).then(function(e){
+    if(my>=shown&amp;&amp;e){shown=my;show(e,true);}
+  }).catch(function(er){
+    if(my>=shown){shown=my;show(lastGood||'…',true);}
+  });
+}
+
+setInterval(function(){
+  if(!on)return;
+  var raw=lines().join(' ').trim();
+  var n=Date.now();
+
+  // detect new text
+  if(raw!==last){
+    var isExt = last &amp;&amp; raw.startsWith(last) &amp;&amp; raw.length > last.length;
+    var isShrink = last &amp;&amp; last.startsWith(raw) &amp;&amp; raw.length < last.length;
+    last=raw;
+
+    if(raw){
+      emptyAt=0;
+
+      if(isExt){
+        // still growing → keep extending buffer, delay translation
+        buf = raw;
+        pend=1; lc=n;
+        if(!fc) fc=n;
+      } else if(isShrink){
+        // caption corrected itself (common) → ignore small shrinks
+        buf = raw;
+        pend=1; lc=n;
+      } else {
+        // completely new cue
+        if(buf &amp;&amp; buf.length >= 8){
+          // translate the previous buffer before switching
+          go(buf);
+        }
+        buf = raw;
+        pend=1; lc=n; fc=n;
+      }
+
+      // already cached?
+      if(cache[raw]){
+        shown=++seq;
+        show(cache[raw],true);
+        pend=0; fc=0;
+        return;
+      }
+    } else {
+      if(!emptyAt) emptyAt=n;
+    }
+  }
+
+  // clear after long empty
+  if(!raw &amp;&amp; emptyAt &amp;&amp; n-emptyAt > 1600){
+    if(buf &amp;&amp; buf.length>=6) go(buf);
+    buf=''; pend=0; fc=0;
+    show('');
+  }
+
+  // decide when to translate the current buffer
+  if(pend &amp;&amp; buf){
+    var stable = n - lc;
+    var alive  = n - fc;
+    var len = buf.length;
+
+    // short fragments need more time, longer ones can go sooner
+    var needStable = len < 12 ? 550 : (len < 25 ? 380 : 260);
+    var maxWait    = len < 12 ? 1400 : 1100;
+
+    if(stable >= needStable || alive >= maxWait){
+      pend=0; fc=0;
+      if(buf !== lastBuf){
+        lastBuf = buf;
+        go(buf);
+      }
+    }
+  }
+}, 85);
+
+window.__te={t:function(){on=!on;st.disabled=!on;o.style.display=on?'block':'none';}};
+var cc=document.querySelector('.ytp-subtitles-button');
+if(cc &amp;&amp; cc.getAttribute('aria-pressed')==='false') cc.click();
+})();">tren</a></p>
+
+<p><small>If translation is still broken on this particular video, tell me what kind of gibberish you see (single random words, mixed sentences, lag, etc.) and I’ll tune it further.</small></p>
+</div>
+<script>
+document.getElementById('cp').onclick=async()=>{
+  const t=document.getElementById('c');
+  t.select();
+  try{await navigator.clipboard.writeText(t.value)}catch(e){document.execCommand('copy')}
+  document.getElementById('ok').textContent='Copied ✓';
+}
+</script>
+</body>
+</html>
