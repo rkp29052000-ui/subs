@@ -85,7 +85,7 @@ function mk(id){
   if(player&&player.loadVideoById){player.loadVideoById(id);return}
   const pv={fs:0,rel:0,playsinline:1,cc_load_policy:0,modestbranding:1};
   if(location.protocol.startsWith('http'))pv.origin=location.origin;else pv.widget_referrer='https://www.youtube.com/';
-  player=new YT.Player('player',{videoId:id,playerVars:pv,events:{onError:e=>{
+  player=new YT.Player('player',{host:'https://www.youtube-nocookie.com',videoId:id,playerVars:pv,events:{onError:e=>{
     setStatus(location.protocol==='file:'||e.data==153||e.data==150||e.data==101
       ?'YouTube blocked playback (error '+e.data+'). If you opened this file from your phone storage, upload it to Netlify Drop or GitHub Pages and open the https link. Otherwise this video may not allow embedding.'
       :'Video error '+e.data+'. Check the link.');}}});
@@ -167,13 +167,21 @@ function parse(text){
 }
 
 /* ---------- translation (starts near current position, runs ahead) ---------- */
+let pref=0,lastErr='';
+async function jget(u){const r=await fetch(u,{signal:timeout(10000)});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
+const BACKENDS=[
+  async q=>{const j=await jget('https://translate.googleapis.com/translate_a/single?client=gtx&sl=te&tl=en&dt=t&q='+encodeURIComponent(q));return j[0].map(x=>x[0]).join('')},
+  async q=>{const j=await jget('https://lingva.ml/api/v1/te/en/'+encodeURIComponent(q));if(!j.translation)throw new Error('empty');return j.translation},
+  async q=>{const j=await jget('https://lingva.thedaviddelta.com/api/v1/te/en/'+encodeURIComponent(q));if(!j.translation)throw new Error('empty');return j.translation},
+  async q=>{const out=[];for(const line of q.split('\n')){const j=await jget('https://api.mymemory.translated.net/get?langpair=te|en&q='+encodeURIComponent(line.slice(0,480)));if(j.responseStatus!=200)throw new Error('mm '+j.responseStatus);out.push(j.responseData.translatedText)}return out.join('\n')}
+];
 async function gt(q){
-  const url='https://translate.googleapis.com/translate_a/single?client=gtx&sl=te&tl=en&dt=t&q='+encodeURIComponent(q);
-  for(let t=0;t<3;t++){
-    try{const r=await fetch(url);if(!r.ok)throw 0;const j=await r.json();return j[0].map(x=>x[0]).join('')}
-    catch(e){await new Promise(r=>setTimeout(r,500*(t+1)))}
+  const order=BACKENDS.map((_,i)=>(i+pref)%BACKENDS.length);
+  for(const i of order){
+    try{const r=await BACKENDS[i](q);if(r&&r.trim()){pref=i;return r}}
+    catch(e){lastErr=e.message||String(e)}
   }
-  throw new Error('fail');
+  throw new Error(lastErr||'fail');
 }
 async function translateAll(my){
   const size=20,starts=[];for(let i=0;i<cues.length;i+=size)starts.push(i);
@@ -188,7 +196,7 @@ async function translateAll(my){
       const res=(await gt(chunk.map(c=>c.te).join('\n'))).split('\n');
       if(res.length===chunk.length)chunk.forEach((c,j)=>c.en=res[j].trim());
       else for(const c of chunk)c.en=await gt(c.te);
-    }catch(e){setStatus('Translation stopped. Check your internet connection and tap Play again.');return}
+    }catch(e){setStatus('Translation failed on every translator ('+lastErr+'). If you use an ad blocker or privacy extension, turn it off for this site and press Play again.');return}
     done+=chunk.length;
     $('bar').firstChild.style.width=(done/cues.length*100)+'%';
     setStatus(done>=cues.length?'Ready. All lines translated.':`Translating ahead… ${done}/${cues.length} (subtitles already work)`);
@@ -209,7 +217,7 @@ setInterval(()=>{
   const c=cues[idx],key=idx+(c&&c.en?'y':'n')+showEn+showTe;
   if(key===active)return;active=key;
   if(!c)return show('');
-  show(showEn?(c.en||c.te):c.te,c.te);
+  show(showEn?(c.en||'Translating…'):c.te,c.te);
 },150);
 
 /* ---------- controls ---------- */
