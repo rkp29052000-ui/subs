@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Telugu → English Live Subtitles</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Noto+Sans+Telugu:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#15121c;--panel:#1f1b2a;--line:#332d44;--text:#ede9f5;--mute:#9a93ad;--gold:#f2b134;--teal:#5ad1c0;--fs:20px}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 "Bricolage Grotesque",system-ui,sans-serif}
+.wrap{max-width:900px;margin:0 auto;padding:14px}
+h1{font-size:18px;margin:0 0 10px}
+.top{display:flex;gap:8px}
+input[type=text],textarea{flex:1;min-width:0;padding:12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit}
+button,.btn{padding:11px 14px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}
+button.primary{background:var(--gold);color:#241a02;border-color:var(--gold);font-weight:700}
+button.on{border-color:var(--teal);color:var(--teal)}
+:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+#stage{position:relative;aspect-ratio:16/9;background:#000;margin-top:12px;border-radius:10px;overflow:hidden}
+#stage:fullscreen{border-radius:0;aspect-ratio:auto;width:100vw;height:100vh}
+#stage:-webkit-full-screen{border-radius:0;aspect-ratio:auto;width:100vw;height:100vh}
+#player,#stage iframe{position:absolute;inset:0;width:100%;height:100%}
+#ov{position:absolute;left:50%;bottom:14%;transform:translateX(-50%);width:92%;text-align:center;pointer-events:none;z-index:5}
+#en{display:inline-block;background:rgba(0,0,0,.8);color:#fff;padding:.2em .55em;border-radius:6px;font-weight:600;font-size:var(--fs);line-height:1.3}
+#te{display:block;margin-top:3px;color:#ddd;font:var(--fs-te,13px)/1.3 "Noto Sans Telugu",sans-serif;text-shadow:0 0 4px #000}
+#fsb{position:absolute;right:8px;top:8px;z-index:6;padding:7px 10px;background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:6px;font-size:13px}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;color:var(--mute)}
+.ctl label{display:flex;gap:6px;align-items:center}
+#status{margin-top:10px;font-size:13px;color:var(--mute);min-height:20px}
+#bar{height:5px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:6px}
+#bar i{display:block;height:100%;width:0;background:var(--teal);transition:width .2s}
+details{margin-top:14px;color:var(--mute);font-size:13px}
+summary{cursor:pointer}
+textarea{width:100%;height:84px;margin-top:8px;font-size:12px}
+input[type=file]{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Telugu → English Live Subtitles <small style="color:var(--mute)">v5</small></h1>
+  <div class="top">
+    <input type="text" id="url" placeholder="Paste YouTube link" inputmode="url" aria-label="YouTube link">
+    <button class="primary" id="go">Play</button>
+  </div>
+
+  <div id="stage">
+    <div id="player"></div>
+    <button id="fsb">Fullscreen</button>
+    <div id="ov"><span id="en"></span><span id="te"></span></div>
+  </div>
+
+  <div class="ctl">
+    <button id="tg" class="on">English: ON</button>
+    <button id="tt">Telugu line: OFF</button>
+    <label>Size <input type="range" id="fs" min="14" max="36" value="20"></label>
+    <span>Sync <button id="m">−0.5</button> <span id="off">0.0s</span> <button id="p">+0.5</button></span>
+  </div>
+  <div id="status">Paste a link and tap Play.</div>
+  <div id="bar"><i></i></div>
+  <div id="diag" style="margin-top:8px;font-size:12px;color:var(--gold);word-break:break-word"></div>
+  <div class="ctl"><button id="tst">Test translators</button></div>
+
+  <details>
+    <summary>Settings and backup options</summary>
+    <p><b>Easiest backup: paste the YouTube transcript.</b> On YouTube open the video, tap <i>…more → Show transcript</i>, select all the transcript lines (with their times), copy, and paste here:</p>
+    <textarea id="paste" placeholder="0:00&#10;first line&#10;0:04&#10;second line…" style="height:120px"></textarea>
+    <button id="usepaste" style="margin-top:8px">Use pasted transcript</button>
+    <p>Or upload a Telugu .srt/.vtt file:</p>
+    <label class="btn">Upload subtitle file<input type="file" id="file" accept=".srt,.vtt,.txt"></label>
+    <p>Extra caption servers (optional, one per line, e.g. <code>invidious https://yewtu.be</code> or <code>piped https://pipedapi.kavin.rocks</code>):</p>
+    <textarea id="custom" placeholder="invidious https://your-server"></textarea>
+  </details>
+</div>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+const $=id=>document.getElementById(id);
+let player=null,cues=[],offset=0,active=-2,showEn=true,showTe=false,vid=null,pending=null,job=0;
+
+const INVIDIOUS=["https://inv.nadeko.net","https://yewtu.be","https://invidious.nerdvpn.de","https://invidious.privacyredirect.com"];
+const PIPED=["https://pipedapi.kavin.rocks","https://pipedapi.adminforge.de","https://api.piped.private.coffee"];
+
+const ytId=u=>{const m=u.match(/(?:youtu\.be\/|v=|embed\/|shorts\/|live\/)([\w-]{11})/);return m?m[1]:(/^[\w-]{11}$/.test(u.trim())?u.trim():null)};
+
+/* ---------- player ---------- */
+function onYouTubeIframeAPIReady(){if(pending)mk(pending)}
+function mk(id){
+  if(player&&player.loadVideoById){player.loadVideoById(id);return}
+  const pv={fs:0,rel:0,playsinline:1,cc_load_policy:0,modestbranding:1};
+  if(location.protocol.startsWith('http'))pv.origin=location.origin;else pv.widget_referrer='https://www.youtube.com/';
+  player=new YT.Player('player',{host:'https://www.youtube-nocookie.com',videoId:id,playerVars:pv,events:{onError:e=>{
+    setStatus(location.protocol==='file:'||e.data==153||e.data==150||e.data==101
+      ?'YouTube blocked playback (error '+e.data+'). If you opened this file from your phone storage, upload it to Netlify Drop or GitHub Pages and open the https link. Otherwise this video may not allow embedding.'
+      :'Video error '+e.data+'. Check the link.');}}});
+}
+$('go').onclick=()=>{
+  const id=ytId($('url').value);
+  if(!id){setStatus('That does not look like a YouTube link.');return}
+  vid=id;pending=id;cues=[];active=-2;show('');
+  if(window.YT&&YT.Player)mk(id);
+  loadSubs(id);
+};
+function setStatus(t){$('status').textContent=t}
+
+/* ---------- fetching captions ---------- */
+function timeout(ms){const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal}
+async function getText(u){const r=await fetch(u,{signal:timeout(9000)});if(!r.ok)throw new Error(r.status);return r.text()}
+async function getJson(u){const r=await fetch(u,{signal:timeout(9000)});if(!r.ok)throw new Error(r.status);return r.json()}
+const pickTe=list=>list.find(x=>(x.language_code||x.code||'').startsWith('te')&&!/auto/i.test(x.label||x.name||'')&&!x.autoGenerated)
+  ||list.find(x=>(x.language_code||x.code||'').startsWith('te'));
+
+const CERR=[];
+async function viaInvidious(base,id){try{return await _vi(base,id)}catch(e){CERR.push(base.replace('https://','')+' '+e.message);throw e}}
+async function _vi(base,id){
+  const j=await getJson(`${base}/api/v1/captions/${id}`);
+  const t=pickTe(j.captions||[]);if(!t)throw new Error('no te');
+  const txt=await getText(t.url.startsWith('http')?t.url:base+t.url);
+  if(!txt.includes('-->'))throw new Error('bad');return txt;
+}
+async function viaPiped(base,id){try{return await _vp(base,id)}catch(e){CERR.push(base.replace('https://','')+' '+e.message);throw e}}
+async function _vp(base,id){
+  const j=await getJson(`${base}/streams/${id}`);
+  const t=pickTe(j.subtitles||[]);if(!t)throw new Error('no te');
+  const txt=await getText(t.url);
+  if(!txt.includes('-->'))throw new Error('bad');return txt;
+}
+const PROXIES=[u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),u=>'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(u),u=>'https://corsproxy.io/?url='+encodeURIComponent(u)];
+function j3(j){
+  const o=[];
+  (j.events||[]).forEach(e=>{if(!e.segs)return;const tx=e.segs.map(x=>x.utf8).join('').replace(/\s+/g,' ').trim();if(!tx)return;
+    o.push({s:e.tStartMs/1000,e:(e.tStartMs+(e.dDurationMs||2500))/1000,te:tx,en:''})});
+  return o.filter((c,i)=>i===0||c.te!==o[i-1].te);
+}
+async function viaWatchPage(id){
+  const errs=[];
+  for(const px of PROXIES){
+    try{
+      const html=await getText(px('https://www.youtube.com/watch?v='+id+'&hl=en'));
+      const m=html.match(/"captionTracks":(\[\{.*?\}\])/);
+      if(!m)throw new Error('no caption list');
+      const tr=JSON.parse(m[1]);
+      const t=tr.find(x=>(x.languageCode||'').startsWith('te'))||tr[0];
+      if(!t)throw new Error('no Telugu track');
+      const c=j3(JSON.parse(await getText(px(t.baseUrl+'&fmt=json3'))));
+      if(!c.length)throw new Error('captions came back empty');
+      return c;
+    }catch(e){errs.push(e.message)}
+  }
+  throw new Error(errs.join(' / '));
+}
+async function dynInstances(){
+  const out={inv:[],pip:[]};
+  try{const j=await getJson('https://api.invidious.io/instances.json?sort_by=type,users');
+    out.inv=j.filter(x=>x[1]&&x[1].api&&x[1].cors&&x[1].type==='https').map(x=>'https://'+x[0]).slice(0,14)}catch(e){}
+  try{const j=await getJson('https://piped-instances.kavin.rocks/');
+    out.pip=j.filter(x=>x.api_url).map(x=>x.api_url.replace(/\/$/,'')).slice(0,10)}catch(e){}
+  return out;
+}
+async function loadSubs(id){
+  CERR.length=0;
+  const my=++job;
+  setStatus('Finding Telugu captions…');$('bar').firstChild.style.width='0';
+  const extra=$('custom').value.split('\n').map(s=>s.trim().split(/\s+/)).filter(a=>a.length==2);
+  const dyn=await dynInstances();
+  const seen=new Set([...INVIDIOUS,...PIPED]);
+  const tries=[
+    ...dyn.inv.filter(b=>!seen.has(b)).map(b=>()=>viaInvidious(b,id)),
+    ...dyn.pip.filter(b=>!seen.has(b)).map(b=>()=>viaPiped(b,id)),
+    ...INVIDIOUS.map(b=>()=>viaInvidious(b,id)),
+    ...PIPED.map(b=>()=>viaPiped(b,id)),
+    ...extra.map(([k,b])=>()=>/^p/i.test(k)?viaPiped(b,id):viaInvidious(b,id))
+  ].map(f=>f());
+  try{
+    const txt=await Promise.any(tries);
+    if(my!==job)return;
+    cues=parse(txt);
+    if(!cues.length)throw new Error('empty');
+    setStatus(`Found ${cues.length} caption lines. Translating…`);
+    translateAll(my);
+  }catch(e){
+    if(my!==job)return;
+    setStatus('Trying another way to get the captions…');
+    try{const c=await viaWatchPage(id);if(my!==job)return;cues=c;active=-2;translateAll();setStatus(`Found ${cues.length} caption lines. Translating as you watch…`);return}catch(e2){var PERR=e2.message}
+    setStatus('Could not get Telugu captions automatically (the video may have none, or the free caption servers are busy). Details: '+CERR.slice(0,3).join(' | ')+' | other way: '+PERR+'. Open "Settings and backup options" to upload a subtitle file or add another server.');
+  }
+}
+$('file').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const my=++job;cues=parse(await f.text());active=-2;
+  if(!cues.length){setStatus('Could not read that file.');return}
+  setStatus(`Loaded ${cues.length} lines. Translating…`);translateAll(my);
+};
+
+/* ---------- parsing ---------- */
+function toSec(t){const m=t.trim().replace(',','.').match(/(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)/);return m?(+(m[1]||0))*3600+(+m[2])*60+parseFloat(m[3]):0}
+function parse(text){
+  text=text.replace(/\r/g,'').replace(/^\uFEFF/,'');
+  const out=[];let prev=[];
+  text.split(/\n{2,}/).forEach(block=>{
+    const L=block.split('\n').map(l=>l.trim()).filter(l=>l&&!/^WEBVTT|^NOTE|^Kind:|^Language:|^\d+$/.test(l));
+    const ti=L.findIndex(l=>l.includes('-->'));if(ti<0)return;
+    const [a,b]=L[ti].split('-->');
+    let lines=L.slice(ti+1).map(l=>l.replace(/<[^>]+>/g,'').replace(/\s+/g,' ').trim()).filter(Boolean);
+    const fresh=lines.filter(l=>!prev.includes(l));
+    prev=lines;
+    if(!fresh.length)return;
+    out.push({s:toSec(a),e:toSec(b.trim().split(/\s/)[0]),te:fresh.join(' '),en:''});
+  });
+  // keep each line visible until the next one starts (auto captions have very short cues)
+  out.forEach((c,i)=>{const n=out[i+1];if(n&&n.s-c.e<2.5)c.e=Math.max(c.e,n.s)});
+  return out;
+}
+
+/* ---------- translation (current line first, then runs ahead) ---------- */
+let pref=0,lastErr='',inflight=0,okCount=0,retryAt=0;
+async function jget(u){const r=await fetch(u,{signal:timeout(10000)});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
+const BK=[
+ ['Google',async q=>(await jget('https://translate.googleapis.com/translate_a/single?client=gtx&sl=te&tl=en&dt=t&q='+encodeURIComponent(q)))[0].map(x=>x[0]).join('')],
+ ['Google2',async q=>{const o=[];for(const l of q.split('\n')){const j=await jget('https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=te&tl=en&q='+encodeURIComponent(l));o.push(j.sentences.map(x=>x.trans).join(''))}return o.join('\n')}],
+ ['Lingva',async q=>{const j=await jget('https://lingva.ml/api/v1/te/en/'+encodeURIComponent(q));if(!j.translation)throw new Error('empty');return j.translation}],
+ ['Lingva2',async q=>{const j=await jget('https://lingva.thedaviddelta.com/api/v1/te/en/'+encodeURIComponent(q));if(!j.translation)throw new Error('empty');return j.translation}],
+ ['MyMemory',async q=>{const o=[];for(const l of q.split('\n')){const j=await jget('https://api.mymemory.translated.net/get?langpair=te|en&q='+encodeURIComponent(l.slice(0,480)));if(j.responseStatus!=200)throw new Error('code '+j.responseStatus);o.push(j.responseData.translatedText)}return o.join('\n')}]
+];
+async function gt(q){
+  for(let n=0;n<BK.length;n++){
+    const i=(n+pref)%BK.length;
+    try{const r=await BK[i][1](q);if(r&&r.trim()){pref=i;return r}}
+    catch(e){lastErr=BK[i][0]+': '+(e.message||e)}
+  }
+  throw new Error(lastErr||'fail');
+}
+function setDiag(t){$('diag').textContent=t}
+async function testTranslators(){
+  setDiag('Testing translators…');const out=[];
+  for(const [n,f] of BK){try{const r=await f('నమస్కారం');out.push(n+' ✓ ('+r.trim().slice(0,20)+')')}catch(e){out.push(n+' ✗ '+(e.message||e))}}
+  setDiag('Translators: '+out.join('  |  '));
+}
+function translateAll(){okCount=0;retryAt=0}
+async function runBatch(i){
+  const b=cues.slice(i,i+8).filter(c=>!c.en&&!c.f);if(!b.length)return;
+  b.forEach(c=>c.f=1);inflight++;
+  try{
+    const res=(await gt(b.map(c=>c.te).join('\n'))).split('\n');
+    if(res.length===b.length)b.forEach((c,k)=>c.en=res[k].trim()||c.te);
+    else for(const c of b)c.en=(await gt(c.te)).trim()||c.te;
+    okCount=cues.filter(c=>c.en).length;
+  }catch(e){retryAt=Date.now()+4000;setDiag('Translation failed. '+lastErr+'. Tap "Test translators". Try turning off ad blocker/VPN, or switch between Wi-Fi and mobile data.')}
+  b.forEach(c=>c.f=0);inflight--;active=-2;
+}
+setInterval(()=>{
+  if(!cues.length||inflight>=2||Date.now()<retryAt)return;
+  const t=player&&player.getCurrentTime?player.getCurrentTime():0;
+  let i=cues.findIndex(c=>c.e>=t);if(i<0)i=0;
+  for(let k=i;k<Math.min(cues.length,i+80);k++){if(!cues[k].en&&!cues[k].f){runBatch(k);break}}
+  const done=cues.filter(c=>c.en).length;
+  if(done)setStatus(`Translated ${done} of ${cues.length} lines (translating ahead as you watch)`);
+},400);
+
+/* ---------- display / sync ---------- */
+function show(en,te){
+  $('en').style.display=en?'inline-block':'none';$('en').textContent=en||'';
+  $('te').textContent=(en&&showTe)?te:'';
+}
+setInterval(()=>{
+  if(!player||!player.getCurrentTime||!cues.length)return;
+  const t=player.getCurrentTime()-offset;
+  let idx=-1;
+  for(let i=0;i<cues.length;i++){if(t>=cues[i].s&&t<cues[i].e){idx=i;break}if(cues[i].s>t)break}
+  const c=cues[idx],key=idx+(c&&c.en?'y':'n')+showEn+showTe;
+  if(key===active)return;active=key;
+  if(!c)return show('');
+  show(showEn?(c.en||'Translating…'):c.te,c.te);
+},150);
+
+/* ---------- controls ---------- */
+$('tg').onclick=()=>{showEn=!showEn;$('tg').textContent='English: '+(showEn?'ON':'OFF');$('tg').classList.toggle('on',showEn);active=-2};
+$('tt').onclick=()=>{showTe=!showTe;$('tt').textContent='Telugu line: '+(showTe?'ON':'OFF');$('tt').classList.toggle('on',showTe);active=-2};
+$('fs').oninput=e=>{document.documentElement.style.setProperty('--fs',e.target.value+'px');document.documentElement.style.setProperty('--fs-te',(e.target.value*.65)+'px')};
+const setOff=v=>{offset=Math.round(v*10)/10;$('off').textContent=(offset>0?'+':'')+offset.toFixed(1)+'s';active=-2};
+$('m').onclick=()=>setOff(offset-.5);$('p').onclick=()=>setOff(offset+.5);
+$('fsb').onclick=async()=>{
+  const s=$('stage');
+  try{
+    if(document.fullscreenElement||document.webkitFullscreenElement){(document.exitFullscreen||document.webkitExitFullscreen).call(document)}
+    else{await (s.requestFullscreen||s.webkitRequestFullscreen).call(s);try{await screen.orientation.lock('landscape')}catch(e){}}
+  }catch(e){setStatus('Fullscreen is not supported in this browser.')}
+};
+function parseTranscript(t){
+  const L=t.replace(/\r/g,'').split('\n').map(l=>l.trim()).filter(Boolean),out=[];
+  for(const l of L){
+    const m=l.match(/^((?:\d+:)?\d+:\d{2})(?:\s+(.*))?$/);
+    if(m)out.push({s:toSec(m[1]),e:0,te:(m[2]||'').trim(),en:''});
+    else if(out.length){const c=out[out.length-1];c.te=(c.te+' '+l).trim()}
+  }
+  out.forEach((c,i)=>c.e=out[i+1]?out[i+1].s:c.s+5);
+  return out.filter(c=>c.te);
+}
+$('usepaste').onclick=()=>{
+  const c=parseTranscript($('paste').value);
+  if(!c.length){setStatus('Could not find times like 0:05 in the pasted text. Copy the transcript with its time stamps.');return}
+  job++;cues=c;active=-2;translateAll();setStatus(`Loaded ${cues.length} transcript lines. Translating as you watch…`);
+};
+$('tst').onclick=testTranslators;
+window.addEventListener('load',()=>setTimeout(testTranslators,800));
+$('url').addEventListener('keydown',e=>{if(e.key==='Enter')$('go').click()});
+</script>
+</body>
+</html>
