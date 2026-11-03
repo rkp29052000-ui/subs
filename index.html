@@ -39,7 +39,7 @@ input[type=file]{display:none}
 </head>
 <body>
 <div class="wrap">
-  <h1>Telugu → English Live Subtitles <small style="color:var(--mute)">v3</small></h1>
+  <h1>Telugu → English Live Subtitles <small style="color:var(--mute)">v5</small></h1>
   <div class="top">
     <input type="text" id="url" placeholder="Paste YouTube link" inputmode="url" aria-label="YouTube link">
     <button class="primary" id="go">Play</button>
@@ -64,7 +64,10 @@ input[type=file]{display:none}
 
   <details>
     <summary>Settings and backup options</summary>
-    <p>If captions can't be found automatically, upload a Telugu .srt/.vtt file:</p>
+    <p><b>Easiest backup: paste the YouTube transcript.</b> On YouTube open the video, tap <i>…more → Show transcript</i>, select all the transcript lines (with their times), copy, and paste here:</p>
+    <textarea id="paste" placeholder="0:00&#10;first line&#10;0:04&#10;second line…" style="height:120px"></textarea>
+    <button id="usepaste" style="margin-top:8px">Use pasted transcript</button>
+    <p>Or upload a Telugu .srt/.vtt file:</p>
     <label class="btn">Upload subtitle file<input type="file" id="file" accept=".srt,.vtt,.txt"></label>
     <p>Extra caption servers (optional, one per line, e.g. <code>invidious https://yewtu.be</code> or <code>piped https://pipedapi.kavin.rocks</code>):</p>
     <textarea id="custom" placeholder="invidious https://your-server"></textarea>
@@ -123,12 +126,48 @@ async function _vp(base,id){
   const txt=await getText(t.url);
   if(!txt.includes('-->'))throw new Error('bad');return txt;
 }
+const PROXIES=[u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),u=>'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(u),u=>'https://corsproxy.io/?url='+encodeURIComponent(u)];
+function j3(j){
+  const o=[];
+  (j.events||[]).forEach(e=>{if(!e.segs)return;const tx=e.segs.map(x=>x.utf8).join('').replace(/\s+/g,' ').trim();if(!tx)return;
+    o.push({s:e.tStartMs/1000,e:(e.tStartMs+(e.dDurationMs||2500))/1000,te:tx,en:''})});
+  return o.filter((c,i)=>i===0||c.te!==o[i-1].te);
+}
+async function viaWatchPage(id){
+  const errs=[];
+  for(const px of PROXIES){
+    try{
+      const html=await getText(px('https://www.youtube.com/watch?v='+id+'&hl=en'));
+      const m=html.match(/"captionTracks":(\[\{.*?\}\])/);
+      if(!m)throw new Error('no caption list');
+      const tr=JSON.parse(m[1]);
+      const t=tr.find(x=>(x.languageCode||'').startsWith('te'))||tr[0];
+      if(!t)throw new Error('no Telugu track');
+      const c=j3(JSON.parse(await getText(px(t.baseUrl+'&fmt=json3'))));
+      if(!c.length)throw new Error('captions came back empty');
+      return c;
+    }catch(e){errs.push(e.message)}
+  }
+  throw new Error(errs.join(' / '));
+}
+async function dynInstances(){
+  const out={inv:[],pip:[]};
+  try{const j=await getJson('https://api.invidious.io/instances.json?sort_by=type,users');
+    out.inv=j.filter(x=>x[1]&&x[1].api&&x[1].cors&&x[1].type==='https').map(x=>'https://'+x[0]).slice(0,14)}catch(e){}
+  try{const j=await getJson('https://piped-instances.kavin.rocks/');
+    out.pip=j.filter(x=>x.api_url).map(x=>x.api_url.replace(/\/$/,'')).slice(0,10)}catch(e){}
+  return out;
+}
 async function loadSubs(id){
   CERR.length=0;
   const my=++job;
   setStatus('Finding Telugu captions…');$('bar').firstChild.style.width='0';
   const extra=$('custom').value.split('\n').map(s=>s.trim().split(/\s+/)).filter(a=>a.length==2);
+  const dyn=await dynInstances();
+  const seen=new Set([...INVIDIOUS,...PIPED]);
   const tries=[
+    ...dyn.inv.filter(b=>!seen.has(b)).map(b=>()=>viaInvidious(b,id)),
+    ...dyn.pip.filter(b=>!seen.has(b)).map(b=>()=>viaPiped(b,id)),
     ...INVIDIOUS.map(b=>()=>viaInvidious(b,id)),
     ...PIPED.map(b=>()=>viaPiped(b,id)),
     ...extra.map(([k,b])=>()=>/^p/i.test(k)?viaPiped(b,id):viaInvidious(b,id))
@@ -142,7 +181,9 @@ async function loadSubs(id){
     translateAll(my);
   }catch(e){
     if(my!==job)return;
-    setStatus('Could not get Telugu captions automatically (the video may have none, or the free caption servers are busy). Details: '+CERR.slice(0,4).join(' | ')+'. Open "Settings and backup options" to upload a subtitle file or add another server.');
+    setStatus('Trying another way to get the captions…');
+    try{const c=await viaWatchPage(id);if(my!==job)return;cues=c;active=-2;translateAll();setStatus(`Found ${cues.length} caption lines. Translating as you watch…`);return}catch(e2){var PERR=e2.message}
+    setStatus('Could not get Telugu captions automatically (the video may have none, or the free caption servers are busy). Details: '+CERR.slice(0,3).join(' | ')+' | other way: '+PERR+'. Open "Settings and backup options" to upload a subtitle file or add another server.');
   }
 }
 $('file').onchange=async e=>{
@@ -245,6 +286,21 @@ $('fsb').onclick=async()=>{
     if(document.fullscreenElement||document.webkitFullscreenElement){(document.exitFullscreen||document.webkitExitFullscreen).call(document)}
     else{await (s.requestFullscreen||s.webkitRequestFullscreen).call(s);try{await screen.orientation.lock('landscape')}catch(e){}}
   }catch(e){setStatus('Fullscreen is not supported in this browser.')}
+};
+function parseTranscript(t){
+  const L=t.replace(/\r/g,'').split('\n').map(l=>l.trim()).filter(Boolean),out=[];
+  for(const l of L){
+    const m=l.match(/^((?:\d+:)?\d+:\d{2})(?:\s+(.*))?$/);
+    if(m)out.push({s:toSec(m[1]),e:0,te:(m[2]||'').trim(),en:''});
+    else if(out.length){const c=out[out.length-1];c.te=(c.te+' '+l).trim()}
+  }
+  out.forEach((c,i)=>c.e=out[i+1]?out[i+1].s:c.s+5);
+  return out.filter(c=>c.te);
+}
+$('usepaste').onclick=()=>{
+  const c=parseTranscript($('paste').value);
+  if(!c.length){setStatus('Could not find times like 0:05 in the pasted text. Copy the transcript with its time stamps.');return}
+  job++;cues=c;active=-2;translateAll();setStatus(`Loaded ${cues.length} transcript lines. Translating as you watch…`);
 };
 $('tst').onclick=testTranslators;
 window.addEventListener('load',()=>setTimeout(testTranslators,800));
